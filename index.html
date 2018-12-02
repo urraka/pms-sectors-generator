@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PMS File Sectors Generator</title>
+    <script type="text/javascript" src="jszip.min.js"></script>
+    <script type="text/javascript" src="pms.js"></script>
+    <style type="text/css">
+        html,body,body>div {margin:0;padding:0;height:100%;cursor:default;}
+        body {font-family:monospace;font-size:12px;background:#20262e;color:#bbb;}
+        body>div {display:flex;align-items:center;justify-content:center;}
+        body>div>div {width:80%;max-width:800px;height:80%;}
+        textarea {
+            width:100%;height:100%;
+            margin-top:4px;padding:4px 6px;
+            background:#10161e;color:inherit;
+            outline:none;cursor:default;
+            resize:none;border:none;
+            box-shadow: 0px 0px 5px 0px rgba(0,0,0,0.75);
+        }
+    </style>
+</head>
+<body>
+<div>
+    <div><textarea readonly></textarea></div>
+</div>
+<script type="text/javascript">
+"use strict";
+
+class App {
+    constructor() {
+        this.pending = [];
+        this.processed = [];
+        this.processing = false;
+
+        document.addEventListener("drop", this.onDrop.bind(this), false);
+        document.addEventListener("dragover", this.onDragOver.bind(this), false);
+        document.addEventListener("dragenter", this.onDragEnter.bind(this), false);
+
+        this.log("-- DROP PMS FILES FOR PROCESSING --");
+    }
+
+    log(msg) {
+        const textarea = document.querySelector("textarea")
+        textarea.value += msg + "\n";
+        textarea.scrollTop = textarea.scrollHeight;
+    }
+
+    continueProcessing() {
+        if (!this.processing && this.pending.length > 0) {
+            this.processing = true;
+            setTimeout(this.processNextFile.bind(this), 0);
+        } else if (!this.processing && this.processed.length > 0) {
+            setTimeout(this.onFinished.bind(this), 0);
+        }
+    }
+
+    processData(file, buffer) {
+        const map = Pms.PmsFile.fromArrayBuffer(buffer);
+        map.sectors = map.generateSectors();
+        this.processed.push({file, map, buffer: map.toArrayBuffer()});
+    }
+
+    processDataTest(file, buffer) {
+        const map1 = Pms.PmsFile.fromArrayBuffer(buffer);
+        const json1 = JSON.stringify(map1);
+        const buffer2 = map1.toArrayBuffer();
+        const map2 = Pms.PmsFile.fromArrayBuffer(buffer2);
+        const json2 = JSON.stringify(map2);
+
+        if (json1 === json2) {
+            this.log("Test OK!");
+        } else {
+            this.log("Test FAILED!");
+        }
+
+        this.processed.push({file, map: map1, buffer});
+    }
+
+    processNextFile() {
+        this.processing = false;
+
+        const total = this.pending.length + this.processed.length;
+        const file = this.pending.shift();
+
+        this.log(`[${this.processed.length + 1} / ${total}] Processing ${file.name}...`);
+
+        const reader = new FileReader();
+        reader.onload = onload.bind(this);
+        reader.onabort = onerror.bind(this);
+        reader.onerror = onerror.bind(this);
+        reader.readAsArrayBuffer(file);
+
+        function onload() {
+            try {
+                this.processData(file, reader.result);
+            } catch(error) {
+                this.processed.push({file, map: null, buffer: null});
+                this.log(`Failed to process ${file.name}`);
+                console.error(error);
+            }
+
+            this.continueProcessing();
+        }
+
+        function onerror() {
+            this.processed.push({file, map: null, buffer: null});
+            this.log(`Failed to load ${file.name}`);
+            this.continueProcessing();
+        }
+    }
+
+    onFinished() {
+        if (this.processed.length === 1) {
+            App.saveAs(this.processed[0].buffer, this.processed[0].file.name);
+        } else {
+            const zip = new JSZip();
+
+            for (const entry of this.processed) {
+                if (entry.buffer) {
+                    zip.file(entry.file.name, entry.buffer, {binary: true});
+                }
+            }
+
+            zip.generateAsync({type: "arraybuffer"}).then(function(buffer) {
+                this.log("Finished processing.");
+                App.saveAs(buffer, "maps.zip");
+            }.bind(this));
+        }
+
+        this.processed = [];
+    }
+
+    onDrop(event) {
+        event.preventDefault();
+
+        for (const file of event.dataTransfer.files) {
+            if (file.name.split(".").pop().toLowerCase() === "pms") {
+                this.pending.push(file);
+            }
+        }
+
+        this.continueProcessing();
+    }
+
+    onDragOver(event) {
+        event.preventDefault();
+    }
+
+    onDragEnter(event) {
+        event.preventDefault();
+    }
+
+    static saveAs(buffer, name) {
+        const blob = new Blob([buffer], {type: "octet/stream"});
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        document.body.appendChild(a);
+        a.style = "display: none";
+        a.href = url;
+        a.download = name;
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    }
+}
+
+const app = new App();
+
+</script>
+</body>
+</html>
